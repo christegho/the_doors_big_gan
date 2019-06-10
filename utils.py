@@ -209,7 +209,16 @@ def prepare_parser():
   parser.add_argument(
     '--num_standing_accumulations', type=int, default=16,
     help='Number of forward passes to use in accumulating standing stats? '
-         '(default: %(default)s)')        
+         '(default: %(default)s)')    
+  parser.add_argument(
+    '--midpoints', type=int, default=16,
+    help='Number of midpoints for sampling when interpolating '
+         '(default: %(default)s)') 
+  parser.add_argument(
+    '--num_per_sheet', type=int, default=16,
+    help='Number of classes to show per sheet '
+         '(default: %(default)s)')      
+          
     
   ### Bookkeping stuff ###  
   parser.add_argument(
@@ -405,28 +414,30 @@ dset_dict = {'I32': dset.ImageFolder, 'I64': dset.ImageFolder,
              'I128': dset.ImageFolder, 'I256': dset.ImageFolder,
              'I32_hdf5': dset.ILSVRC_HDF5, 'I64_hdf5': dset.ILSVRC_HDF5, 
              'I128_hdf5': dset.ILSVRC_HDF5, 'I256_hdf5': dset.ILSVRC_HDF5,
-             'C10': dset.CIFAR10, 'C100': dset.CIFAR100}
+             'C10': dset.CIFAR10, 'C100': dset.CIFAR100,
+             'DOORS': dset.ImageFolder}
 imsize_dict = {'I32': 32, 'I32_hdf5': 32,
                'I64': 64, 'I64_hdf5': 64,
                'I128': 128, 'I128_hdf5': 128,
                'I256': 256, 'I256_hdf5': 256,
-               'C10': 32, 'C100': 32}
+               'C10': 32, 'C100': 32, 
+               'DOORS': 256}
 root_dict = {'I32': 'ImageNet', 'I32_hdf5': 'ILSVRC32.hdf5',
              'I64': 'ImageNet', 'I64_hdf5': 'ILSVRC64.hdf5',
              'I128': 'ImageNet', 'I128_hdf5': 'ILSVRC128.hdf5',
              'I256': 'ImageNet', 'I256_hdf5': 'ILSVRC256.hdf5',
-             'C10': 'cifar', 'C100': 'cifar'}
+             'C10': 'cifar', 'C100': 'cifar', 'DOORS': 'doors'}
 nclass_dict = {'I32': 1000, 'I32_hdf5': 1000,
                'I64': 1000, 'I64_hdf5': 1000,
                'I128': 1000, 'I128_hdf5': 1000,
                'I256': 1000, 'I256_hdf5': 1000,
-               'C10': 10, 'C100': 100}
+               'C10': 10, 'C100': 100, 'DOORS': 1}
 # Number of classes to put per sample sheet               
 classes_per_sheet_dict = {'I32': 50, 'I32_hdf5': 50,
                           'I64': 50, 'I64_hdf5': 50,
                           'I128': 20, 'I128_hdf5': 20,
                           'I256': 20, 'I256_hdf5': 20,
-                          'C10': 10, 'C100': 100}
+                          'C10': 10, 'C100': 100, 'DOORS': 1}
 activation_dict = {'inplace_relu': nn.ReLU(inplace=True),
                    'relu': nn.ReLU(inplace=False),
                    'ir': nn.ReLU(inplace=True),}
@@ -909,7 +920,7 @@ def sample_sheet(G, classes_per_sheet, num_classes, samples_per_class, parallel,
 
 # Interp function; expects x0 and x1 to be of shape (shape0, 1, rest_of_shape..)
 def interp(x0, x1, num_midpoints):
-  lerp = torch.linspace(0, 1.0, num_midpoints + 2, device='cuda').to(x0.dtype)
+  lerp = torch.linspace(0.0, 1.0, num_midpoints + 2, device='cuda').to(x0.dtype)
   return ((x0 * (1 - lerp.view(1, -1, 1))) + (x1 * lerp.view(1, -1, 1)))
 
 
@@ -918,37 +929,70 @@ def interp(x0, x1, num_midpoints):
 def interp_sheet(G, num_per_sheet, num_midpoints, num_classes, parallel,
                  samples_root, experiment_name, folder_number, sheet_number=0,
                  fix_z=False, fix_y=False, device='cuda'):
+  return False
   # Prepare zs and ys
-  if fix_z: # If fix Z, only sample 1 z per row
-    zs = torch.randn(num_per_sheet, 1, G.dim_z, device=device)
-    zs = zs.repeat(1, num_midpoints + 2, 1).view(-1, G.dim_z)
-  else:
-    zs = interp(torch.randn(num_per_sheet, 1, G.dim_z, device=device),
-                torch.randn(num_per_sheet, 1, G.dim_z, device=device),
-                num_midpoints).view(-1, G.dim_z)
-  if fix_y: # If fix y, only sample 1 z per row
-    ys = sample_1hot(num_per_sheet, num_classes)
-    ys = G.shared(ys).view(num_per_sheet, 1, -1)
-    ys = ys.repeat(1, num_midpoints + 2, 1).view(num_per_sheet * (num_midpoints + 2), -1)
-  else:
-    ys = interp(G.shared(sample_1hot(num_per_sheet, num_classes)).view(num_per_sheet, 1, -1),
-                G.shared(sample_1hot(num_per_sheet, num_classes)).view(num_per_sheet, 1, -1),
-                num_midpoints).view(num_per_sheet * (num_midpoints + 2), -1)
-  # Run the net--note that we've already passed y through G.shared.
-  if G.fp16:
-    zs = zs.half()
-  with torch.no_grad():
-    if parallel:
-      out_ims = nn.parallel.data_parallel(G, (zs, ys)).data.cpu()
-    else:
-      out_ims = G(zs, ys).data.cpu()
-  interp_style = '' + ('Z' if not fix_z else '') + ('Y' if not fix_y else '')
-  image_filename = '%s/%s/%d/interp%s%d.jpg' % (samples_root, experiment_name,
-                                                folder_number, interp_style,
-                                                sheet_number)
-  torchvision.utils.save_image(out_ims, image_filename,
-                               nrow=num_midpoints + 2, normalize=True)
+#   if fix_z: # If fix Z, only sample 1 z per row
+#     zs = torch.randn(num_per_sheet, 1, G.dim_z, device=device)
+#     zs = zs.repeat(1, num_midpoints + 2, 1).view(-1, G.dim_z)
+#   else:
+#     zss = interp(torch.randn(num_per_sheet, 1, G.dim_z, device=device),
+#                 torch.randn(num_per_sheet, 1, G.dim_z, device=device),
+#                 num_midpoints).view(-1, G.dim_z)
 
+#     zss = interp(torch.linspace(-5.0*2, 5.0*2, G.dim_z, device=device).to(torch.float32).view(1, 1, -1),
+#                 torch.linspace(5.0*2, -5.0*2, G.dim_z, device=device).to(torch.float32).view(1, 1, -1),
+#                 num_midpoints*num_per_sheet + 2*(num_per_sheet-1)).view(-1, G.dim_z)
+#     import pdb; pdb.set_trace()
+#   if fix_y: # If fix y, only sample 1 z per row
+#     ys = sample_1hot(num_per_sheet, num_classes)
+#     ys = G.shared(ys).view(num_per_sheet, 1, -1)
+#     ys = ys.repeat(1, num_midpoints + 2, 1).view(num_per_sheet * (num_midpoints + 2), -1)
+#   else:
+#     yss = interp(G.shared(sample_1hot(num_per_sheet, num_classes)).view(num_per_sheet, 1, -1),
+#                 G.shared(sample_1hot(num_per_sheet, num_classes)).view(num_per_sheet, 1, -1),
+#                 num_midpoints).view(num_per_sheet * (num_midpoints + 2), -1)
+#     import pdb; pdb.set_trace()
+#     yss = interp(G.shared(sample_1hot(1, num_classes)).view(1, 1, -1),
+#                 G.shared(sample_1hot(1, num_classes)).view(1, 1, -1),
+#                 num_midpoints*num_per_sheet + 2*(num_per_sheet-1)).view(num_per_sheet * (num_midpoints + 2), -1)
+  r1 = -4.0
+  r2 = +4.0
+  mean = 0.0
+  scale = 1.0
+#   opop = (r1 - r2) * torch.rand(1, 1, G.dim_z, device=device) + r2
+  opop = scale*torch.randn(1, 1, G.dim_z, device=device) + mean
+  opop = torch.clamp(opop, r1, r2)
+#   roop = (r1 - r2) * torch.rand(1, 1, G.dim_z, device=device) + r2
+  roop = scale*torch.randn(1, 1, G.dim_z, device=device) + mean
+  roop = torch.clamp(roop, r1, r2)
+  for num_sheet in range(num_per_sheet):
+      zs = interp(opop,
+                roop,
+                num_midpoints).view(-1, G.dim_z)
+      opop = roop
+#       roop = (r1 - r2) * torch.rand(1, 1, G.dim_z, device=device) + r2
+      roop = scale*torch.randn(1, 1, G.dim_z, device=device) + mean
+      roop = torch.clamp(roop, r1, r2)
+      ys = interp(G.shared(sample_1hot(1, num_classes)).view(1, 1, -1),
+        G.shared(sample_1hot(1, num_classes)).view(1, 1, -1),
+        num_midpoints).view(1 * (num_midpoints + 2), -1)
+#       ys = yss[num_sheet*(num_midpoints+2):(num_sheet+1)*(num_midpoints+2)]
+#       zs = zss[num_sheet*(num_midpoints+2):(num_sheet+1)*(num_midpoints+2)]
+#       import pdb; pdb.set_trace()
+      # Run the net--note that we've already passed y through G.shared.
+      if G.fp16:
+        zs = zs.half()
+      with torch.no_grad():
+        if parallel:
+          out_ims = nn.parallel.data_parallel(G, (zs, ys)).data.cpu()
+        else:
+          out_ims = G(zs, ys).data.cpu()
+      interp_style = '' + ('Z' if not fix_z else '') + ('Y' if not fix_y else '')
+      for image_i in range(out_ims.shape[0]):
+        image_filename = '%s/%s/%d/interp%s%d%d.jpg' % (samples_root, experiment_name,
+                                                    folder_number, interp_style,
+                                                    sheet_number, image_i+num_sheet*out_ims.shape[0])
+        torchvision.utils.save_image(out_ims[image_i], image_filename)
 
 # Convenience debugging function to print out gradnorms and shape from each layer
 # May need to rewrite this so we can actually see which parameter is which

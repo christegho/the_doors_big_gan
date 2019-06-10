@@ -120,10 +120,10 @@ def run(config):
   # Sample interp sheets
   if config['sample_interps']:
     print('Preparing interp sheets...')
-    for fix_z, fix_y in zip([False, False, True], [False, True, False]):
-      utils.interp_sheet(G, num_per_sheet=16, num_midpoints=8,
+    for fix_z, fix_y in zip([False], [False]):
+      utils.interp_sheet(G, num_per_sheet=config['num_per_sheet'], num_midpoints=config['midpoints'],
                          num_classes=config['n_classes'], 
-                         parallel=config['parallel'], 
+                         parallel=False, 
                          samples_root=config['samples_root'], 
                          experiment_name=experiment_name,
                          folder_number=config['sample_sheet_folder_num'], 
@@ -138,10 +138,11 @@ def run(config):
                                  nrow=int(G_batch_size**0.5),
                                  normalize=True)
 
-  # Get Inception Score and FID
-  get_inception_metrics = inception_utils.prepare_inception_metrics(config['dataset'], config['parallel'], config['no_fid'])
+
   # Prepare a simple function get metrics that we use for trunc curves
   def get_metrics():
+    # Get Inception Score and FID
+    get_inception_metrics = inception_utils.prepare_inception_metrics(config['dataset'], config['parallel'], config['no_fid'])
     sample = functools.partial(utils.sample, G=G, z_=z_, y_=y_, config=config)    
     IS_mean, IS_std, FID = get_inception_metrics(sample, config['num_inception_images'], num_splits=10, prints=False)
     # Prepare output string
