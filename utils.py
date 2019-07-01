@@ -955,16 +955,22 @@ def interp_sheet(G, num_per_sheet, num_midpoints, num_classes, parallel,
 #     yss = interp(G.shared(sample_1hot(1, num_classes)).view(1, 1, -1),
 #                 G.shared(sample_1hot(1, num_classes)).view(1, 1, -1),
 #                 num_midpoints*num_per_sheet + 2*(num_per_sheet-1)).view(num_per_sheet * (num_midpoints + 2), -1)
-  r1 = -4.0
-  r2 = +4.0
-  mean = 0.0
+  r1 = -4.4
+  r2 = +4
+  mean = -0.2
   scale = 1.0
+  scale_y = 1.0
 #   opop = (r1 - r2) * torch.rand(1, 1, G.dim_z, device=device) + r2
   opop = scale*torch.randn(1, 1, G.dim_z, device=device) + mean
-  opop = torch.clamp(opop, r1, r2)
+#   opop = torch.clamp(opop, r1, r2)
 #   roop = (r1 - r2) * torch.rand(1, 1, G.dim_z, device=device) + r2
   roop = scale*torch.randn(1, 1, G.dim_z, device=device) + mean
-  roop = torch.clamp(roop, r1, r2)
+#   roop = torch.clamp(roop, r1, r2)
+  y_s = G.shared(sample_1hot(1, num_classes)).view(1, 1, -1)
+  y_s = y_s + torch.randn_like(y_s)*scale_y
+  y_e = G.shared(sample_1hot(1, num_classes)).view(1, 1, -1)
+  y_e = y_e + torch.randn_like(y_e)*scale_y
+
   for num_sheet in range(num_per_sheet):
       zs = interp(opop,
                 roop,
@@ -973,9 +979,12 @@ def interp_sheet(G, num_per_sheet, num_midpoints, num_classes, parallel,
 #       roop = (r1 - r2) * torch.rand(1, 1, G.dim_z, device=device) + r2
       roop = scale*torch.randn(1, 1, G.dim_z, device=device) + mean
       roop = torch.clamp(roop, r1, r2)
-      ys = interp(G.shared(sample_1hot(1, num_classes)).view(1, 1, -1),
-        G.shared(sample_1hot(1, num_classes)).view(1, 1, -1),
+      ys = interp(y_s,
+        y_e,
         num_midpoints).view(1 * (num_midpoints + 2), -1)
+      y_s = y_e
+      y_e = G.shared(sample_1hot(1, num_classes)).view(1, 1, -1)
+      y_e = y_e + torch.randn_like(y_e)*scale_y
 #       ys = yss[num_sheet*(num_midpoints+2):(num_sheet+1)*(num_midpoints+2)]
 #       zs = zss[num_sheet*(num_midpoints+2):(num_sheet+1)*(num_midpoints+2)]
 #       import pdb; pdb.set_trace()

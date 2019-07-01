@@ -1,8 +1,8 @@
 from PIL import Image
 import os
 
-for subdir in ['brainimaging']:
-    directory = 'data/doors__/{}'.format(subdir)
+for subdir in ['lizards']:
+    directory = 'data/doors/{}'.format(subdir)
     list_files = os.listdir(directory)
 
     for filename in list_files:

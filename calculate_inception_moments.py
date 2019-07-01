@@ -36,7 +36,7 @@ def prepare_parser():
     '--augment', action='store_true', default=False,
     help='Augment with random crops and flips (default: %(default)s)')
   parser.add_argument(
-    '--num_workers', type=int, default=8,
+    '--num_workers', type=int, default=1,
     help='Number of dataloader workers (default: %(default)s)')
   parser.add_argument(
     '--shuffle', action='store_true', default=False,
