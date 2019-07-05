@@ -17,6 +17,7 @@ import json
 import pickle
 from argparse import ArgumentParser
 import animal_hash
+import cv2
 
 import torch
 import torch.nn as nn
@@ -24,6 +25,7 @@ import torch.nn.functional as F
 import torchvision
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
+import torch.distributions as tdist
 
 import datasets as dset
 
@@ -926,10 +928,10 @@ def interp(x0, x1, num_midpoints):
 
 # interp sheet function
 # Supports full, class-wise and intra-class interpolation
-def interp_sheet(G, num_per_sheet, num_midpoints, num_classes, parallel,
+def interp_sheet_old(G, num_per_sheet, num_midpoints, num_classes, parallel,
                  samples_root, experiment_name, folder_number, sheet_number=0,
                  fix_z=False, fix_y=False, device='cuda'):
-  return False
+  # return False
   # Prepare zs and ys
 #   if fix_z: # If fix Z, only sample 1 z per row
 #     zs = torch.randn(num_per_sheet, 1, G.dim_z, device=device)
@@ -1003,6 +1005,152 @@ def interp_sheet(G, num_per_sheet, num_midpoints, num_classes, parallel,
                                                     sheet_number, image_i+num_sheet*out_ims.shape[0])
         torchvision.utils.save_image(out_ims[image_i], image_filename)
 
+# interp sheet function
+# Supports full, class-wise and intra-class interpolation
+def interp_sheet(G, num_per_sheet, num_midpoints, num_classes, parallel,
+                 samples_root, experiment_name, folder_number, sheet_number=0,
+                 fix_z=False, fix_y=False, device='cuda'):
+  r1 = -40.0
+  r2 = +40.0
+  mean = 0.0
+  scale = 1.25
+
+#   opop = (r1 - r2) * torch.rand(1, 1, G.dim_z, device=device) + r2
+  opop = scale*torch.randn(1, 1, G.dim_z, device=device) + mean
+  opop = torch.clamp(opop, r1, r2)
+#   roop = (r1 - r2) * torch.rand(1, 1, G.dim_z, device=device) + r2
+  roop = scale*torch.randn(1, 1, G.dim_z, device=device) + mean
+  roop = torch.clamp(roop, r1, r2)
+
+
+  n = tdist.Normal(torch.zeros(G.dim_z, device='cuda'), 1.25*torch.ones(G.dim_z, device='cuda'))
+  opop = scale * n.sample((1,))
+  roop = scale * n.sample((1,))
+
+  # G = G.to('cpu')
+  ys = interp(
+          G.shared(sample_1hot(1, num_classes)).view(1, 1, -1),
+          G.shared(sample_1hot(1, num_classes)).view(1, 1, -1),
+        num_midpoints).view(1 * (num_midpoints + 2), -1)
+
+  interp_style = '' + ('Z' if not fix_z else '') + ('Y' if not fix_y else '')
+
+  image_counter = 0
+  for num_sheet in range(num_per_sheet):
+      zs = interp(opop,
+                roop,
+                num_midpoints).view(-1, G.dim_z)
+      opop = roop
+      #print('zs shape:{}'.format(zs.shape))
+#       roop = (r1 - r2) * torch.rand(1, 1, G.dim_z, device=device) + r2
+
+#      roop = scale*torch.randn(1, 1, G.dim_z, device=device) + mean
+#      roop = torch.clamp(roop, r1, r2)
+
+      # Before we accept this roop for the next round, ensure that it won't
+      # result in an image that is mostly black
+      while True:
+          roop = scale * n.sample((1,))
+          roop_single = roop.view(1, -1)
+          out_pot = G(roop_single, ys[0].view(1,-1)).data.cpu()
+          out_pot = out_pot[0].numpy()
+          out_pot = np.transpose(out_pot) # reshaping but reshape doesn't do it
+          out_pot = (out_pot + 1) * 127
+          potential_image = cv2.cvtColor(out_pot, cv2.COLOR_RGB2GRAY)
+          pot_image_mean = np.mean(potential_image)
+          pot_image_stddev = np.std(potential_image)
+
+          if pot_image_mean > 20 and pot_image_mean < 235 and pot_image_stddev > 15 :
+
+            break
+          else:
+            print('dismissing sample')
+
+
+#       ys = yss[num_sheet*(num_midpoints+2):(num_sheet+1)*(num_midpoints+2)]
+#       zs = zss[num_sheet*(num_midpoints+2):(num_sheet+1)*(num_midpoints+2)]
+      # Run the net--note that we've already passed y through G.shared.
+      if G.fp16:
+        zs = zs.half()
+      with torch.no_grad():
+        if True:
+          print('parallel image sampling')
+          out_ims = nn.parallel.data_parallel(G, (zs, ys)).data.cpu()
+        else:
+
+          for zs_single, ys_single in zip(zs, ys):
+            zs_single = zs_single.view(1, -1)
+            ys_single = ys_single.view(1, -1)
+            out_ims = G(zs_single, ys_single).data.cpu()
+
+            #print('out_ims shape:{}'.format(out_ims.shape))
+        for image_i in range(out_ims.shape[0]):
+          image_filename = '%s/%s/%d/interp%s%d%d.png' % (samples_root, experiment_name,
+                                                      folder_number, interp_style,
+                                                      sheet_number, image_counter)
+
+          torchvision.utils.save_image(out_ims[image_i], image_filename)
+          array_save_name = '{}/{}/{}/{}{}{}'.format(
+            samples_root, experiment_name, folder_number, interp_style, sheet_number, image_counter)
+          np.save(array_save_name, zs[image_i].cpu())
+
+          image_counter += 1
+
+def interp_sheet_new(G, num_per_sheet, num_midpoints, num_classes, parallel,
+                 samples_root, experiment_name, folder_number, sheet_number=0,
+                 fix_z=False, fix_y=False, device='cpu'):
+
+  interp_style = '' + ('Z' if not fix_z else '') + ('Y' if not fix_y else '')
+
+  scale = 1.25
+  image_counter = 0
+  file_path_0 = \
+  '/data/the-doors-big-gan/samples/brainimaging_256_9/1111_2/ZY01457.npy'
+  file_path_1 = \
+    '/data/the-doors-big-gan/samples/brainimaging_256_9/1111_2/ZY01518.npy'
+  G = G.to('cpu')
+  ys = interp(
+          G.shared(sample_1hot(1, num_classes)).view(1, 1, -1),
+          G.shared(sample_1hot(1, num_classes)).view(1, 1, -1),
+        num_midpoints).view(1 * (num_midpoints + 2), -1)
+  n = tdist.Normal(torch.zeros(G.dim_z), 1.25*torch.ones(G.dim_z))
+  opop = scale * n.sample((1,))
+
+
+
+  starting_tensor = torch.tensor(np.load(file_path_0))
+  ending_tensor = torch.tensor(np.load(file_path_1))
+  #ending_tensor = opop
+
+  for idx in range(1):
+
+    #ending_tensor = torch.tensor(np.load(file_path.format(array_names[idx+1])))
+
+    zs = interp(
+      starting_tensor,
+      ending_tensor,
+      num_midpoints).view(-1, G.dim_z)
+
+
+    if G.fp16:
+      zs = zs.half()
+    with torch.no_grad():
+      for zs_single, ys_single in zip(zs, ys):
+        zs_single = zs_single.view(1, -1)
+        ys_single = ys_single.view(1, -1)
+        out_ims = G(zs_single, ys_single).data.cpu()
+
+        for image_i in range(out_ims.shape[0]):
+          image_filename = '%s/%s/%d/interp%s%d%d.png' % (samples_root, experiment_name,
+                                                      folder_number, interp_style,
+                                                      sheet_number, image_counter)
+
+          torchvision.utils.save_image(out_ims[image_i], image_filename)
+          array_save_name = '{}/{}/{}/{}{}{}'.format(
+            samples_root, experiment_name, folder_number, interp_style, sheet_number, image_counter)
+          np.save(array_save_name, zs_single)
+
+          image_counter += 1
 # Convenience debugging function to print out gradnorms and shape from each layer
 # May need to rewrite this so we can actually see which parameter is which
 def print_grad_norms(net):
