@@ -120,7 +120,7 @@ def run(config):
   # Sample interp sheets
   if config['sample_interps']:
     print('Preparing interp sheets...')
-    for fix_z, fix_y in zip([False], [False]):
+    for fix_z, fix_y in zip([False, True], [False, True]):
       utils.interp_sheet(G, num_per_sheet=config['num_per_sheet'], num_midpoints=config['midpoints'],
                          num_classes=config['n_classes'], 
                          parallel=False, 

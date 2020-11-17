@@ -1,4 +1,4 @@
-python3 sample.py \
+python sample.py \
 --dataset DOORS --parallel --shuffle  --num_workers 4 --batch_size 40   \
 --G_ortho 0.0 \
 --G_shared \
@@ -7,8 +7,9 @@ python3 sample.py \
 --G_eval_mode \
 --G_ch 96 --D_ch 96 \
 --ema --use_ema --ema_start 20000 \
---test_every 20000 --save_every 200 --num_best_copies 5 --num_save_copies 5 --seed 0 \
+--test_every 20000 --save_every 200 --num_best_copies 10 --num_save_copies 10 --seed 0 \
 --use_multiepoch_sampler \
 --skip_init --G_batch_size 512  --use_ema --G_eval_mode  \
---sample_interps --sample_sheet_folder_num 1111 --midpoints 50  --num_per_sheet 5 \
---experiment_name psychadelia_256
+--sample_interps --sample_random --sample_sheets \
+--sample_sheet_folder_num 1111 --midpoints 50  --num_per_sheet 5 \
+--experiment_name logos
